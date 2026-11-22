@@ -369,6 +369,9 @@ func (s *Server) media(private bool) fiber.Handler {
 			f.Close()
 			return e
 		}
+		if !private {
+			c.Set("Cache-Control", "private, max-age=31536000, immutable")
+		}
 		return c.SendStream(f, int(st.Size()))
 	}
 }
