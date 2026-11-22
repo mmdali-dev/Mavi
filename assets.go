@@ -51,7 +51,9 @@ func pageWithAssets(page fiber.Handler, staff bool) fiber.Handler {
 		case ".png":
 			c.Set("Content-Type", "image/png")
 		}
-		if !staff {
+		if staff {
+			c.Set("Cache-Control", "private, max-age=31536000, immutable")
+		} else {
 			c.Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		return c.Send(data)
