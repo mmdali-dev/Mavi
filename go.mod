@@ -7,6 +7,7 @@ toolchain go1.26.11
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/gofiber/fiber/v3 v3.6.1
+	golang.org/x/image v0.48.0
 	gorm.io/gorm v1.25.12
 )
 
@@ -29,8 +30,8 @@ require (
 	github.com/valyala/fasthttp v1.75.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect

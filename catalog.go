@@ -1,8 +1,13 @@
 package mavi
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"github.com/gofiber/fiber/v3"
+	_ "golang.org/x/image/webp"
 	"gorm.io/gorm"
 	"image"
 	_ "image/jpeg"
@@ -22,7 +27,7 @@ func (s *Server) menu(c fiber.Ctx) error {
 	defer s.menuMu.Unlock()
 	c.Set("Content-Type", "application/json")
 	if s.menuJSON != nil && time.Now().Before(s.menuUntil) {
-		return c.Send(s.menuJSON)
+		return s.sendCachedMenu(c)
 	}
 	var out = fiber.Map{}
 	e := s.DB.Transaction(func(tx *gorm.DB) error {
@@ -45,9 +50,36 @@ func (s *Server) menu(c fiber.Ctx) error {
 	s.menuJSON = nil
 	if len(data) <= 512<<10 {
 		s.menuJSON = data
+		s.menuGzip = nil
+		s.menuETag = fmt.Sprintf(`W/"%x"`, sha256.Sum256(data))
 		s.menuUntil = time.Now().Add(30 * time.Second)
+		return s.sendCachedMenu(c)
 	}
 	return c.Send(data)
+}
+
+func (s *Server) sendCachedMenu(c fiber.Ctx) error {
+	c.Set("Cache-Control", "private, no-cache")
+	c.Vary("Accept-Encoding")
+	if matchesETag(c, s.menuETag) {
+		return c.Status(304).Send(nil)
+	}
+	if len(s.menuJSON) >= 512 && c.Get("Accept-Encoding") != "" && c.AcceptsEncodings("gzip", "identity") == "gzip" {
+		if s.menuGzip == nil {
+			var buf bytes.Buffer
+			writer := gzip.NewWriter(&buf)
+			if _, err := writer.Write(s.menuJSON); err != nil {
+				return err
+			}
+			if err := writer.Close(); err != nil {
+				return err
+			}
+			s.menuGzip = buf.Bytes()
+		}
+		c.Set("Content-Encoding", "gzip")
+		return c.Send(s.menuGzip)
+	}
+	return c.Send(s.menuJSON)
 }
 
 func (s *Server) invalidateMenu() { s.menuMu.Lock(); s.menuJSON = nil; s.menuMu.Unlock() }
@@ -280,8 +312,8 @@ func (s *Server) upload(c fiber.Ctx) error {
 	}
 	defer in.Close()
 	cfg, kind, e := image.DecodeConfig(in)
-	if e != nil || (kind != "png" && kind != "jpeg") {
-		return fieldError("file", "تصویر خوانده نشد؛ یک فایل سالم JPEG یا PNG بفرستید.")
+	if e != nil || (kind != "png" && kind != "jpeg" && kind != "webp") {
+		return fieldError("file", "تصویر خوانده نشد؛ یک فایل سالم JPEG، PNG یا WebP بفرستید.")
 	}
 	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 4096 || cfg.Height > 4096 || int64(cfg.Width)*int64(cfg.Height) > 8e6 {
 		return fieldError("file", "هر ضلع تصویر باید حداکثر ۴۰۹۶ پیکسل و کل تصویر حداکثر ۸ مگاپیکسل باشد.")

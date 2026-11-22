@@ -62,12 +62,34 @@ func PrepareDeployment() error {
 			return err
 		}
 	}
+	assets, err := bundledAssets()
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll("webassets", 0755); err != nil {
+		return err
+	}
+	for name, data := range assets {
+		path := filepath.Join("webassets", name)
+		if _, err = os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			if err = installMissing(path, data); err != nil {
+				return err
+			}
+		}
+		local, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(local, data) {
+			return fmt.Errorf("asset mismatch: %s", path)
+		}
+	}
 	return nil
 }
 
 // Publish a complete file atomically without replacing an existing file.
 func installMissing(name string, data []byte) error {
-	temp, err := os.CreateTemp(".", ".mavi-install-*")
+	temp, err := os.CreateTemp(filepath.Dir(name), ".mavi-install-*")
 	if err != nil {
 		return err
 	}
@@ -101,6 +123,8 @@ type Server struct {
 	tables    map[int]bool
 	menuMu    sync.Mutex
 	menuJSON  []byte
+	menuGzip  []byte
+	menuETag  string
 	menuUntil time.Time
 	uploadMu  sync.Mutex
 }
@@ -197,6 +221,17 @@ func tableSet(raw string) (map[int]bool, error) {
 
 const contentPolicy = "default-src 'self'; script-src %s; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
+func matchesETag(c fiber.Ctx, etag string) bool {
+	c.Set("ETag", etag)
+	for _, value := range strings.Split(c.Get("If-None-Match"), ",") {
+		value = strings.TrimSpace(value)
+		if value == "*" || strings.TrimPrefix(value, "W/") == strings.TrimPrefix(etag, "W/") {
+			return true
+		}
+	}
+	return false
+}
+
 // Cache only immutable responses. Replacing the local file reloads it on the next request.
 func diskPage(path string, public bool) fiber.Handler {
 	var mu sync.Mutex
@@ -240,7 +275,7 @@ func diskPage(path string, public bool) fiber.Handler {
 			}
 			data = bytes.ReplaceAll(data, []byte(` nonce="__MAVI_NONCE__"`), nil)
 			var buf bytes.Buffer
-			w, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+			w := gzip.NewWriter(&buf)
 			if _, err = w.Write(data); err != nil {
 				return err
 			}
@@ -249,6 +284,9 @@ func diskPage(path string, public bool) fiber.Handler {
 			}
 			raw, compressed, last = data, buf.Bytes(), st
 			policy = fmt.Sprintf(contentPolicy, src)
+			if !public {
+				policy = strings.Replace(policy, "img-src 'self' data:", "img-src 'self' data: blob:", 1)
+			}
 			etag = fmt.Sprintf(`W/"%x"`, sha256.Sum256(data))
 		}
 		c.Set("Content-Security-Policy", policy)
@@ -256,12 +294,8 @@ func diskPage(path string, public bool) fiber.Handler {
 		c.Vary("Accept-Encoding")
 		if public {
 			c.Set("Cache-Control", "public, no-cache")
-			c.Set("ETag", etag)
-			for _, v := range strings.Split(c.Get("If-None-Match"), ",") {
-				v = strings.TrimSpace(v)
-				if v == "*" || strings.TrimPrefix(v, "W/") == strings.TrimPrefix(etag, "W/") {
-					return c.Status(304).Send(nil)
-				}
+			if matchesETag(c, etag) {
+				return c.Status(304).Send(nil)
 			}
 		}
 		if c.Get("Accept-Encoding") != "" && c.AcceptsEncodings("gzip", "identity") == "gzip" {
@@ -356,7 +390,8 @@ func New(cfg Config) (*Server, error) {
 		}
 		return c.Redirect().Status(302).To(p)
 	})
-	for _, p := range []string{"/menu", "/tracking", "/about"} {
+	app.Get("/menu", pageWithAssets(publicPage, false))
+	for _, p := range []string{"/tracking", "/about"} {
 		app.Get(p, publicPage)
 	}
 	pub := app.Group("/api/public/v1")
@@ -365,7 +400,7 @@ func New(cfg Config) (*Server, error) {
 	pub.Post("/orders", s.order(false))
 	pub.Post("/tracking", s.track)
 	if cfg.Staff != "" {
-		app.Get(cfg.Staff, diskPage("mavi-staff.html", false))
+		app.Get(cfg.Staff, pageWithAssets(diskPage("mavi-staff.html", false), true))
 		g := app.Group(cfg.Staff + "/api/v1")
 		g.Post("/orders", s.order(true))
 		g.Get("/units", s.units)
