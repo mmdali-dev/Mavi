@@ -482,18 +482,30 @@ dialog{width:min(600px,calc(100% - 24px));max-height:min(90vh,880px);max-height:
   }
   const names = { categories: "دسته", products: "محصول" };
   async function compactUpload(file) {
-    if (file.type !== "image/jpeg" || file.size < 256 * 1024 || !window.createImageBitmap) return file;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size <= 1024 * 1024 || !window.createImageBitmap) return file;
     let bitmap;
     try {
+      if (file.type !== "image/jpeg") {
+        const header = new DataView(await file.slice(0, 65536).arrayBuffer());
+        if (file.type === "image/webp" && header.getUint32(12) === 0x56503858 && (header.getUint8(20) & 2)) return file;
+        if (file.type === "image/png") {
+          let offset = 8;
+          while (offset + 8 <= header.byteLength && header.getUint32(offset + 4) !== 0x49444154) {
+            if (header.getUint32(offset + 4) === 0x6163544c) return file;
+            offset += 12 + header.getUint32(offset);
+          }
+          if (offset + 8 > header.byteLength) return file;
+        }
+      }
       bitmap = await createImageBitmap(file);
       const { width, height } = bitmap;
-      if (width > 4096 || height > 4096 || width * height > 8000000) return file;
+      if (width * height > 32000000) return file;
       const canvas = document.createElement("canvas");
       canvas.width = width;
       canvas.height = height;
       canvas.getContext("2d").drawImage(bitmap, 0, 0);
       const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", 0.92));
-      if (!blob || blob.type !== "image/webp" || blob.size > file.size * 0.9) return file;
+      if (!blob?.size || blob.type !== "image/webp" || blob.size >= file.size) return file;
       return new File([blob], "photo.webp", { type: blob.type });
     } catch {
       return file;
@@ -569,18 +581,13 @@ dialog{width:min(600px,calc(100% - 24px));max-height:min(90vh,880px);max-height:
       let preview = el("div");
       preview.className = "preview";
       if (img) preview.append(safeImg(img));
-      parts.push(field("تصویر اصلی JPEG، PNG یا WebP؛ حداکثر ۴ مگابایت، ۸ مگاپیکسل و ۴۰۹۶ پیکسل در هر ضلع", f), preview);
+      parts.push(field("تصویر JPEG، PNG یا WebP؛ عکس‌های بالای ۱ مگابایت در صورت امکان بدون تغییر ابعاد فشرده می‌شوند.", f), preview);
       const save = button("ذخیره", send);
       f.onchange = () => {
         const file = f.files[0];
         f.setCustomValidity("");
         preview.replaceChildren(...(img ? [safeImg(img)] : []));
         if (!file) return;
-        if (file.size > 4 * 1024 * 1024) {
-          f.setCustomValidity("حجم تصویر باید حداکثر ۴ مگابایت باشد.");
-          f.reportValidity();
-          return;
-        }
         const picture = el("img");
         const url = URL.createObjectURL(file);
         picture.onload = picture.onerror = () => URL.revokeObjectURL(url);

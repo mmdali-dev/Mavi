@@ -29,6 +29,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/valyala/fasthttp"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -400,6 +401,13 @@ func New(cfg Config) (*Server, error) {
 	pub.Post("/orders", s.order(false))
 	pub.Post("/tracking", s.track)
 	if cfg.Staff != "" {
+		uploadPath := cfg.Staff + "/api/v1/media"
+		app.Server().HeaderReceived = func(header *fasthttp.RequestHeader) fasthttp.RequestConfig {
+			if header.IsPost() && string(header.RequestURI()) == uploadPath {
+				return fasthttp.RequestConfig{MaxRequestBodySize: 64 << 20, ReadTimeout: 3 * time.Minute}
+			}
+			return fasthttp.RequestConfig{}
+		}
 		app.Get(cfg.Staff, pageWithAssets(diskPage("mavi-staff.html", false), true))
 		g := app.Group(cfg.Staff + "/api/v1")
 		g.Post("/orders", s.order(true))

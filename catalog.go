@@ -299,13 +299,11 @@ func (s *Server) upload(c fiber.Ctx) error {
 		return fail(429, "یک تصویر در حال پردازش است؛ دوباره تلاش کنید.")
 	}
 	defer s.uploadMu.Unlock()
-	f, e := c.FormFile("file")
-	if e != nil {
+	form, e := c.Request().MultipartFormWithLimit(64 << 20)
+	if e != nil || len(form.File["file"]) == 0 {
 		return fieldError("file", "فایل تصویر در درخواست پیدا نشد.")
 	}
-	if f.Size > 4<<20 {
-		return fail(413, "تصویر بیش از حد بزرگ است.")
-	}
+	f := form.File["file"][0]
 	in, e := f.Open()
 	if e != nil {
 		return e
@@ -315,14 +313,13 @@ func (s *Server) upload(c fiber.Ctx) error {
 	if e != nil || (kind != "png" && kind != "jpeg" && kind != "webp") {
 		return fieldError("file", "تصویر خوانده نشد؛ یک فایل سالم JPEG، PNG یا WebP بفرستید.")
 	}
-	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 4096 || cfg.Height > 4096 || int64(cfg.Width)*int64(cfg.Height) > 8e6 {
-		return fieldError("file", "هر ضلع تصویر باید حداکثر ۴۰۹۶ پیکسل و کل تصویر حداکثر ۸ مگاپیکسل باشد.")
-	}
-	if _, e = in.Seek(0, io.SeekStart); e != nil {
-		return e
-	}
-	if _, _, e = image.Decode(in); e != nil {
-		return fieldError("file", "فایل تصویر ناقص یا خراب است؛ یک تصویر دیگر انتخاب کنید.")
+	if cfg.Width > 0 && cfg.Height > 0 && cfg.Width <= 8000000/cfg.Height {
+		if _, e = in.Seek(0, io.SeekStart); e != nil {
+			return e
+		}
+		if _, _, e = image.Decode(in); e != nil {
+			return fieldError("file", "فایل تصویر ناقص یا خراب است؛ یک تصویر دیگر انتخاب کنید.")
+		}
 	}
 	id := token()
 	p := filepath.Join(s.cfg.Dir, "media", id)
